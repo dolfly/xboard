@@ -9,18 +9,16 @@ use App\Services\PaymentService;
 use App\Utils\Helper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Log;
 
 class PaymentController extends Controller
 {
     public function getPaymentMethods()
     {
         $methods = [];
-
-        $pluginMethods = PaymentService::getAllPaymentMethodNames();
-        $methods = array_merge($methods, $pluginMethods);
-
-        return $this->success(array_unique($methods));
+        foreach (glob(base_path('app//Payments') . '/*.php') as $file) {
+            array_push($methods, pathinfo($file)['filename']);
+        }
+        return $this->success($methods);
     }
 
     public function fetch()
@@ -39,29 +37,23 @@ class PaymentController extends Controller
 
     public function getPaymentForm(Request $request)
     {
-        try {
-            $paymentService = new PaymentService($request->input('payment'), $request->input('id'));
-            return $this->success(collect($paymentService->form()));
-        } catch (\Exception $e) {
-            return $this->fail([400, '支付方式不存在或未启用']);
-        }
+        $paymentService = new PaymentService($request->input('payment'), $request->input('id'));
+        return $this->success(collect($paymentService->form())->values());
     }
 
     public function show(Request $request)
     {
         $payment = Payment::find($request->input('id'));
-        if (!$payment)
-            return $this->fail([400202, '支付方式不存在']);
+        if (!$payment) return $this->fail([400202 ,'支付方式不存在']);
         $payment->enable = !$payment->enable;
-        if (!$payment->save())
-            return $this->fail([500, '保存失败']);
+        if (!$payment->save()) return $this->fail([500 ,'保存失败']);
         return $this->success(true);
     }
 
     public function save(Request $request)
     {
         if (!admin_setting('app_url')) {
-            return $this->fail([400, '请在站点配置中配置站点地址']);
+            return $this->fail([400 ,'请在站点配置中配置站点地址']);
         }
         $params = $request->validate([
             'name' => 'required',
@@ -81,19 +73,18 @@ class PaymentController extends Controller
         ]);
         if ($request->input('id')) {
             $payment = Payment::find($request->input('id'));
-            if (!$payment)
-                return $this->fail([400202, '支付方式不存在']);
+            if (!$payment) return $this->fail([400202 ,'支付方式不存在']);
             try {
                 $payment->update($params);
             } catch (\Exception $e) {
-                Log::error($e);
-                return $this->fail([500, '保存失败']);
+                \Log::error($e);
+                return $this->fail([500 ,'保存失败']);
             }
             return $this->success(true);
         }
         $params['uuid'] = Helper::randomChar(8);
         if (!Payment::create($params)) {
-            return $this->fail([500, '保存失败']);
+            return $this->fail([500 ,'保存失败']);
         }
         return $this->success(true);
     }
@@ -101,8 +92,7 @@ class PaymentController extends Controller
     public function drop(Request $request)
     {
         $payment = Payment::find($request->input('id'));
-        if (!$payment)
-            return $this->fail([400202, '支付方式不存在']);
+        if (!$payment) return $this->fail([400202 ,'支付方式不存在']);
         return $this->success($payment->delete());
     }
 
@@ -115,7 +105,7 @@ class PaymentController extends Controller
             'ids.required' => '参数有误',
             'ids.array' => '参数有误'
         ]);
-        try {
+        try{
             DB::beginTransaction();
             foreach ($request->input('ids') as $k => $v) {
                 if (!Payment::find($v)->update(['sort' => $k + 1])) {
@@ -123,11 +113,11 @@ class PaymentController extends Controller
                 }
             }
             DB::commit();
-        } catch (\Exception $e) {
+        }catch(\Exception $e){
             DB::rollBack();
-            return $this->fail([500, '保存失败']);
+            return $this->fail([500 ,'保存失败']);
         }
-
+        
         return $this->success(true);
     }
 }

@@ -1,60 +1,47 @@
 <?php
 
-namespace Plugin\Btcpay;
+namespace App\Payments;
 
-use App\Services\Plugin\AbstractPlugin;
-use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
+use App\Contracts\PaymentInterface;
 
-class Plugin extends AbstractPlugin implements PaymentInterface
+class BTCPay implements PaymentInterface
 {
-    public function boot(): void
+    protected $config;
+    public function __construct($config)
     {
-        $this->filter('available_payment_methods', function($methods) {
-            if ($this->getConfig('enabled', true)) {
-                $methods['BTCPay'] = [
-                    'name' => $this->getConfig('display_name', 'BTCPay'),
-                    'icon' => $this->getConfig('icon', '₿'),
-                    'plugin_code' => $this->getPluginCode(),
-                    'type' => 'plugin'
-                ];
-            }
-            return $methods;
-        });
+        $this->config = $config;
     }
 
     public function form(): array
     {
         return [
             'btcpay_url' => [
-                'label' => 'API接口所在网址',
-                'type' => 'string',
-                'required' => true,
-                'description' => '包含最后的斜杠，例如：https://your-btcpay.com/'
+                'label' => 'API接口所在网址(包含最后的斜杠)',
+                'description' => '',
+                'type' => 'input',
             ],
             'btcpay_storeId' => [
-                'label' => 'Store ID',
-                'type' => 'string',
-                'required' => true,
-                'description' => 'BTCPay商店标识符'
+                'label' => 'storeId',
+                'description' => '',
+                'type' => 'input',
             ],
             'btcpay_api_key' => [
                 'label' => 'API KEY',
-                'type' => 'string',
-                'required' => true,
-                'description' => '个人设置中的API KEY(非商店设置中的)'
+                'description' => '个人设置中的API KEY(非商店设置中的)',
+                'type' => 'input',
             ],
             'btcpay_webhook_key' => [
                 'label' => 'WEBHOOK KEY',
-                'type' => 'string',
-                'required' => true,
-                'description' => 'Webhook通知密钥'
+                'description' => '',
+                'type' => 'input',
             ],
         ];
     }
 
     public function pay($order): array
     {
+
         $params = [
             'jsonResponse' => true,
             'amount' => sprintf('%.2f', $order['total_amount'] / 100),
@@ -65,15 +52,16 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         ];
 
         $params_string = @json_encode($params);
-        $ret_raw = $this->curlPost($this->getConfig('btcpay_url') . 'api/v1/stores/' . $this->getConfig('btcpay_storeId') . '/invoices', $params_string);
+
+        $ret_raw = self::_curlPost($this->config['btcpay_url'] . 'api/v1/stores/' . $this->config['btcpay_storeId'] . '/invoices', $params_string);
+
         $ret = @json_decode($ret_raw, true);
 
         if (empty($ret['checkoutLink'])) {
             throw new ApiException("error!");
         }
-        
         return [
-            'type' => 1,
+            'type' => 1, // Redirect to url
             'data' => $ret['checkoutLink'],
         ];
     }
@@ -81,38 +69,46 @@ class Plugin extends AbstractPlugin implements PaymentInterface
     public function notify($params): array|bool
     {
         $payload = trim(request()->getContent());
+
         $headers = getallheaders();
+
+        //IS Btcpay-Sig
+        //NOT BTCPay-Sig
+        //API doc is WRONG!
         $headerName = 'Btcpay-Sig';
         $signraturHeader = isset($headers[$headerName]) ? $headers[$headerName] : '';
         $json_param = json_decode($payload, true);
 
-        $computedSignature = "sha256=" . \hash_hmac('sha256', $payload, $this->getConfig('btcpay_webhook_key'));
+        $computedSignature = "sha256=" . \hash_hmac('sha256', $payload, $this->config['btcpay_webhook_key']);
 
-        if (!$this->hashEqual($signraturHeader, $computedSignature)) {
+        if (!self::hashEqual($signraturHeader, $computedSignature)) {
             throw new ApiException('HMAC signature does not match', 400);
         }
 
+        //get order id store in metadata
         $context = stream_context_create(array(
             'http' => array(
                 'method' => 'GET',
-                'header' => "Authorization:" . "token " . $this->getConfig('btcpay_api_key') . "\r\n"
+                'header' => "Authorization:" . "token " . $this->config['btcpay_api_key'] . "\r\n"
             )
         ));
 
-        $invoiceDetail = file_get_contents($this->getConfig('btcpay_url') . 'api/v1/stores/' . $this->getConfig('btcpay_storeId') . '/invoices/' . $json_param['invoiceId'], false, $context);
+        $invoiceDetail = file_get_contents($this->config['btcpay_url'] . 'api/v1/stores/' . $this->config['btcpay_storeId'] . '/invoices/' . $json_param['invoiceId'], false, $context);
         $invoiceDetail = json_decode($invoiceDetail, true);
+
 
         $out_trade_no = $invoiceDetail['metadata']["orderId"];
         $pay_trade_no = $json_param['invoiceId'];
-        
         return [
             'trade_no' => $out_trade_no,
             'callback_no' => $pay_trade_no
         ];
     }
 
-    private function curlPost($url, $params = false)
+
+    private function _curlPost($url, $params = false)
     {
+
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
         curl_setopt($ch, CURLOPT_HEADER, false);
@@ -122,15 +118,22 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         curl_setopt(
             $ch,
             CURLOPT_HTTPHEADER,
-            array('Authorization:' . 'token ' . $this->getConfig('btcpay_api_key'), 'Content-Type: application/json')
+            array('Authorization:' . 'token ' . $this->config['btcpay_api_key'], 'Content-Type: application/json')
         );
         $result = curl_exec($ch);
         curl_close($ch);
         return $result;
     }
 
+
+    /**
+     * @param string $str1
+     * @param string $str2
+     * @return bool
+     */
     private function hashEqual($str1, $str2)
     {
+
         if (function_exists('hash_equals')) {
             return \hash_equals($str1, $str2);
         }
@@ -147,4 +150,4 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             return !$ret;
         }
     }
-} 
+}

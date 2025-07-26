@@ -164,6 +164,7 @@ class UserController extends Controller
         $users = $userModel->orderBy('id', 'desc')
             ->paginate($pageSize, ['*'], 'page', $current);
 
+        /** @phpstan-ignore-next-line */
         $users->getCollection()->transform(function ($user): array {
             return self::transformUserData($user);
         });

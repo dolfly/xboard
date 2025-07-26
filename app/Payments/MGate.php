@@ -1,27 +1,20 @@
 <?php
 
-namespace Plugin\Mgate;
+/**
+ * 自己写别抄，抄NMB抄
+ */
+namespace App\Payments;
 
-use App\Services\Plugin\AbstractPlugin;
-use App\Contracts\PaymentInterface;
 use App\Exceptions\ApiException;
-use Curl\Curl;
-
-class Plugin extends AbstractPlugin implements PaymentInterface
+use \Curl\Curl;
+use App\Contracts\PaymentInterface;
+class MGate implements PaymentInterface
 {
-    public function boot(): void
+    private $config;
+
+    public function __construct($config)
     {
-        $this->filter('available_payment_methods', function ($methods) {
-            if ($this->getConfig('enabled', true)) {
-                $methods['MGate'] = [
-                    'name' => $this->getConfig('display_name', 'MGate'),
-                    'icon' => $this->getConfig('icon', '🏛️'),
-                    'plugin_code' => $this->getPluginCode(),
-                    'type' => 'plugin'
-                ];
-            }
-            return $methods;
-        });
+        $this->config = $config;
     }
 
     public function form(): array
@@ -29,26 +22,23 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         return [
             'mgate_url' => [
                 'label' => 'API地址',
-                'type' => 'string',
-                'required' => true,
-                'description' => 'MGate支付网关API地址'
+                'description' => '',
+                'type' => 'input',
             ],
             'mgate_app_id' => [
-                'label' => 'APP ID',
-                'type' => 'string',
-                'required' => true,
-                'description' => 'MGate应用标识符'
+                'label' => 'APPID',
+                'description' => '',
+                'type' => 'input',
             ],
             'mgate_app_secret' => [
-                'label' => 'App Secret',
-                'type' => 'string',
-                'required' => true,
-                'description' => 'MGate应用密钥'
+                'label' => 'AppSecret',
+                'description' => '',
+                'type' => 'input',
             ],
             'mgate_source_currency' => [
                 'label' => '源货币',
-                'type' => 'string',
-                'description' => '默认CNY，源货币类型'
+                'description' => '默认CNY',
+                'type' => 'input'
             ]
         ];
     }
@@ -61,26 +51,21 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             'notify_url' => $order['notify_url'],
             'return_url' => $order['return_url']
         ];
-
-        if ($this->getConfig('mgate_source_currency')) {
-            $params['source_currency'] = $this->getConfig('mgate_source_currency');
+        if (isset($this->config['mgate_source_currency'])) {
+            $params['source_currency'] = $this->config['mgate_source_currency'];
         }
-
-        $params['app_id'] = $this->getConfig('mgate_app_id');
+        $params['app_id'] = $this->config['mgate_app_id'];
         ksort($params);
-        $str = http_build_query($params) . $this->getConfig('mgate_app_secret');
+        $str = http_build_query($params) . $this->config['mgate_app_secret'];
         $params['sign'] = md5($str);
-
         $curl = new Curl();
         $curl->setUserAgent('MGate');
         $curl->setOpt(CURLOPT_SSL_VERIFYPEER, 0);
-        $curl->post($this->getConfig('mgate_url') . '/v1/gateway/fetch', http_build_query($params));
+        $curl->post($this->config['mgate_url'] . '/v1/gateway/fetch', http_build_query($params));
         $result = $curl->response;
-
         if (!$result) {
             throw new ApiException('网络异常');
         }
-
         if ($curl->error) {
             if (isset($result->errors)) {
                 $errors = (array) $result->errors;
@@ -91,15 +76,12 @@ class Plugin extends AbstractPlugin implements PaymentInterface
             }
             throw new ApiException('未知错误');
         }
-
         $curl->close();
-
         if (!isset($result->data->trade_no)) {
             throw new ApiException('接口请求失败');
         }
-
         return [
-            'type' => 1,
+            'type' => 1, // 0:qrcode 1:url
             'data' => $result->data->pay_url
         ];
     }
@@ -110,12 +92,10 @@ class Plugin extends AbstractPlugin implements PaymentInterface
         unset($params['sign']);
         ksort($params);
         reset($params);
-        $str = http_build_query($params) . $this->getConfig('mgate_app_secret');
-
+        $str = http_build_query($params) . $this->config['mgate_app_secret'];
         if ($sign !== md5($str)) {
             return false;
         }
-
         return [
             'trade_no' => $params['out_trade_no'],
             'callback_no' => $params['trade_no']
